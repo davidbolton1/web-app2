@@ -5,7 +5,8 @@ const cookieParser = require("cookie-parser");
 const logger = require("morgan");
 const path = require("path");
 const { createServer } = require("http");
-const { auth, requiresAuth} = require("express-openid-connect");
+const { auth, requiresAuth } = require("express-openid-connect");
+const axios = require("axios").default;
 
 const {
   checkUrl,
@@ -43,28 +44,25 @@ app.use(
    authRequired: false,
    auth0Logout: true,
    baseURL: APP_URL,
+   authorizationParams: {
+     response_type: "code id_token",
+     audience: "https://expenses-api",
+     scope: "openid profile email read:reports",
+   },
  })
 );
 
-const expenses = [
-  {
-    date: new Date(),
-    description: "Pizza for a Coding Dojo session.",
-    value: 102,
-  },
-  {
-    date: new Date(),
-    description: "Coffee for a Coding Dojo session.",
-    value: 42,
-  },
-];
-
 app.get("/", async (req, res) => {
-  res.render("home", {
-    user: req.oidc && req.oidc.user,
-    total: expenses.reduce((accum, expense) => accum + expense.value, 0),
-    count: expenses.length,
-  });
+  try {
+    const summary = await axios.get(`${API_URL}/total`);
+    res.render("home", {
+      user: req.oidc && req.oidc.user,
+      total: summary.data.total,
+      count: summary.data.count,
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // 👇 add requiresAuth middlware to these private routes  👇
@@ -79,11 +77,25 @@ app.get("/user", requiresAuth(), async (req, res) => {
 });
 
 app.get("/expenses", requiresAuth(), async (req, res, next) => {
-  res.render("expenses", {
-    user: req.oidc && req.oidc.user,
-    expenses,
-  });
+ try {
+   // 👇 get the token from the request 👇
+   const { token_type, access_token } = req.oidc.accessToken;
+   // 👇 then send it as an authorization header 👇
+   const expenses = await axios.get(`${API_URL}/reports`, {
+     headers: {
+       Authorization: `${token_type} ${access_token}`,
+     },
+   });
+   // 👆 end of changes 👆
+   res.render("expenses", {
+     user: req.oidc && req.oidc.user,
+     expenses: expenses.data,
+   });
+ } catch (err) {
+   next(err);
+ }
 });
+
 
 // catch 404 and forward to error handler
 app.use(function (req, res, next) {
